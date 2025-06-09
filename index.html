@@ -1,22 +1,117 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <style>body { margin: 0; }</style>
-  </head>
-  <body>
-    <div id="substack-feed-embed"></div>
-    <script>
-      window.SubstackFeedWidget = {
-        substackUrl: "testforzanskarweb.substack.com",
-        posts: 9,
-        layout: "center",
-        colors: {
-          primary: "#404040",
-          secondary: "#808080",
-          background: "#FFFFFF"
-        }
-      };
-    </script>
-    <script src="https://substackapi.com/embeds/feed.js" async></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <title>Substack Feed with Filters</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 2rem;
+      background: #ffffff;
+      color: #333;
+    }
+
+    .filters {
+      margin-bottom: 1rem;
+    }
+
+    .filters button {
+      margin-right: 0.5rem;
+      padding: 0.5rem 1rem;
+      border: none;
+      background: #404040;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    .filters button.active {
+      background: #808080;
+    }
+
+    .post {
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #ddd;
+    }
+
+    .post-title {
+      font-weight: bold;
+      font-size: 1.1rem;
+    }
+
+    .post-date {
+      font-size: 0.9rem;
+      color: #777;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="filters">
+    <button data-filter="all" class="active">All</button>
+    <button data-filter="Blog">Blog</button>
+    <button data-filter="News">News</button>
+    <button data-filter="Press">Press</button>
+  </div>
+
+  <div id="feed"></div>
+
+  <script>
+    async function fetchRSS() {
+      const res = await fetch('https://testforzanskarweb.substack.com/feed');
+      const text = await res.text();
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(text, "application/xml");
+      const items = xml.querySelectorAll("item");
+
+      const feed = document.getElementById("feed");
+
+      items.forEach(item => {
+        const title = item.querySelector("title").textContent;
+        const link = item.querySelector("link").textContent;
+        const pubDate = new Date(item.querySelector("pubDate").textContent);
+        const dateStr = pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+        const div = document.createElement("div");
+        div.classList.add("post");
+
+        // Extract category from title
+        const match = title.match(/^(Blog|News|Press):/i);
+        const category = match ? match[1] : "Other";
+        div.setAttribute("data-category", category);
+
+        div.innerHTML = `
+          <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
+          <div class="post-date">${dateStr}</div>
+        `;
+
+        feed.appendChild(div);
+      });
+    }
+
+    fetchRSS();
+
+    // Filtering logic
+    document.querySelectorAll(".filters button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        const selected = btn.dataset.filter;
+        document.querySelectorAll(".post").forEach(post => {
+          const category = post.dataset.category;
+          if (selected === "all" || category.toLowerCase() === selected.toLowerCase()) {
+            post.style.display = "";
+          } else {
+            post.style.display = "none";
+          }
+        });
+      });
+    });
+  </script>
+</body>
 </html>
