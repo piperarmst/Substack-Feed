@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Substack Feed with Filters</title>
+  <title>Substack Feed Grid</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
@@ -12,7 +12,7 @@
     }
 
     .filters {
-      margin-bottom: 1rem;
+      margin-bottom: 2rem;
     }
 
     .filters button {
@@ -29,15 +29,40 @@
       background: #808080;
     }
 
+    #feed {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 2rem;
+    }
+
     .post {
-      margin-bottom: 1.5rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid #ddd;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      transition: box-shadow 0.2s ease;
+      background: white;
+    }
+
+    .post:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .post img {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      display: block;
+    }
+
+    .post-content {
+      padding: 1rem;
     }
 
     .post-title {
       font-weight: bold;
-      font-size: 1.1rem;
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
     }
 
     .post-title a {
@@ -50,12 +75,8 @@
     }
 
     .post-date {
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       color: #777;
-    }
-
-    .hidden {
-      display: none;
     }
   </style>
 </head>
@@ -93,12 +114,10 @@
         div.setAttribute("data-category", category);
 
         div.innerHTML = `
-          <div class="post-inner" style="display: flex; gap: 1rem; align-items: flex-start;">
-            ${thumbnail ? `<img src="${thumbnail}" alt="" style="width: 120px; height: auto; object-fit: cover; border-radius: 6px;">` : ''}
-            <div>
-              <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
-              <div class="post-date">${dateStr}</div>
-            </div>
+          ${thumbnail ? `<img src="${thumbnail}" alt="">` : ''}
+          <div class="post-content">
+            <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
+            <div class="post-date">${dateStr}</div>
           </div>
         `;
 
