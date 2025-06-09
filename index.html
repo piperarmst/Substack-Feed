@@ -5,7 +5,7 @@
   <title>Substack Feed with Filters</title>
   <style>
     body {
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
       margin: 2rem;
       background: #ffffff;
       color: #333;
@@ -40,6 +40,15 @@
       font-size: 1.1rem;
     }
 
+    .post-title a {
+      color: #333;
+      text-decoration: none;
+    }
+
+    .post-title a:hover {
+      text-decoration: underline;
+    }
+
     .post-date {
       font-size: 0.9rem;
       color: #777;
@@ -58,28 +67,26 @@
     <button data-filter="Press">Press</button>
   </div>
 
-  <div id="feed"></div>
+  <div id="feed">Loading posts...</div>
 
   <script>
     async function fetchRSS() {
-      const res = await fetch('https://testforzanskarweb.substack.com/feed');
-      const text = await res.text();
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(text, "application/xml");
-      const items = xml.querySelectorAll("item");
+      const url = "https://api.rss2json.com/v1/api.json?rss_url=https://testforzanskarweb.substack.com/feed";
+      const res = await fetch(url);
+      const data = await res.json();
 
       const feed = document.getElementById("feed");
+      feed.innerHTML = ''; // Clear "Loading..." text
 
-      items.forEach(item => {
-        const title = item.querySelector("title").textContent;
-        const link = item.querySelector("link").textContent;
-        const pubDate = new Date(item.querySelector("pubDate").textContent);
+      data.items.forEach(item => {
+        const title = item.title;
+        const link = item.link;
+        const pubDate = new Date(item.pubDate);
         const dateStr = pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
         const div = document.createElement("div");
         div.classList.add("post");
 
-        // Extract category from title
         const match = title.match(/^(Blog|News|Press):/i);
         const category = match ? match[1] : "Other";
         div.setAttribute("data-category", category);
@@ -95,7 +102,6 @@
 
     fetchRSS();
 
-    // Filtering logic
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
