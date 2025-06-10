@@ -2,78 +2,131 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Substack Feed Debug</title>
+  <title>Substack Feed Grid</title>
   <style>
     body {
-      font-family: sans-serif;
-      padding: 2rem;
-      background: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      margin: 2rem;
+      background: #ffffff;
       color: #333;
     }
-    .post {
-      border-bottom: 1px solid #ccc;
+
+    .filters {
       margin-bottom: 2rem;
-      padding-bottom: 1rem;
     }
-    .debug-box {
-      background: #f8f8f8;
-      padding: 1rem;
-      font-family: monospace;
-      font-size: 0.85rem;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      border: 1px dashed #999;
-      margin-top: 0.5rem;
+
+    .filters button {
+      margin-right: 0.5rem;
+      padding: 0.5rem 1rem;
+      border: none;
+      background: #404040;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
     }
-    img {
-      max-width: 300px;
+
+    .filters button.active {
+      background: #808080;
+    }
+
+    #feed {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 2rem;
+    }
+
+    .post {
+      border: 1px solid #eee;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      transition: box-shadow 0.2s ease;
+      background: white;
+    }
+
+    .post:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .post img {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
       display: block;
-      margin: 0.5rem 0;
+    }
+
+    .post-content {
+      padding: 1rem;
+    }
+
+    .post-title {
+      font-weight: bold;
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .post-title a {
+      color: #333;
+      text-decoration: none;
+    }
+
+    .post-title a:hover {
+      text-decoration: underline;
+    }
+
+    .post-date {
+      font-size: 0.85rem;
+      color: #777;
     }
   </style>
 </head>
 <body>
-  <h1>🛠 Substack Feed Debug View</h1>
-  <p>This page shows what’s coming from Substack via <code>rss2json</code>.</p>
+  <div class="filters">
+    <button data-filter="all" class="active">All</button>
+    <button data-filter="Blog">Blog</button>
+    <button data-filter="News">News</button>
+    <button data-filter="Press">Press</button>
+  </div>
 
-  <div id="feed">Loading...</div>
+  <div id="feed">Loading posts...</div>
 
   <script>
     async function fetchRSS() {
       const url = "https://api.rss2json.com/v1/api.json?rss_url=https://testforzanskarweb.substack.com/feed";
       const res = await fetch(url);
       const data = await res.json();
+
       const feed = document.getElementById("feed");
       feed.innerHTML = '';
 
-      data.items.forEach((item, i) => {
+      data.items.forEach(item => {
         const title = item.title;
         const link = item.link;
-        const pubDate = new Date(item.pubDate).toLocaleDateString();
-        const thumbnail = item.thumbnail;
-        const rawDescription = item.description;
+        const pubDate = new Date(item.pubDate);
+        const dateStr = pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
-        // Try to extract first <img> from description
-        let extractedImg = '';
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = rawDescription;
-        const imgEl = tempDiv.querySelector("img");
-        if (imgEl) extractedImg = imgEl.src;
+        // Try thumbnail, then fallback to first image in description
+        let thumbnail = item.thumbnail;
+        if (!thumbnail) {
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = item.description;
+          const firstImg = tempDiv.querySelector("img");
+          thumbnail = firstImg ? firstImg.src : '';
+        }
 
         const div = document.createElement("div");
         div.classList.add("post");
 
+        const match = title.match(/^(Blog|News|Press):/i);
+        const category = match ? match[1] : "Other";
+        div.setAttribute("data-category", category);
+
         div.innerHTML = `
-          <h2>${title}</h2>
-          <p><strong>Published:</strong> ${pubDate}</p>
-          <p><strong>Link:</strong> <a href="${link}" target="_blank">${link}</a></p>
-          <p><strong>RSS Thumbnail:</strong> ${thumbnail || '<em>None</em>'}</p>
-          ${thumbnail ? `<img src="${thumbnail}" alt="thumbnail">` : ''}
-          ${extractedImg ? `<p><strong>Extracted Image:</strong><br><img src="${extractedImg}" alt="extracted"></p>` : '<p><strong>Extracted Image:</strong> <em>None found</em></p>'}
-          <details>
-            <summary>View Raw Description</summary>
-            <div class="debug-box">${rawDescription.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
-          </details>
+          ${thumbnail ? `<img src="${thumbnail}" alt="">` : ''}
+          <div class="post-content">
+            <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
+            <div class="post-date">${dateStr}</div>
+          </div>
         `;
 
         feed.appendChild(div);
@@ -81,6 +134,23 @@
     }
 
     fetchRSS();
+
+    document.querySelectorAll(".filters button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        const selected = btn.dataset.filter;
+        document.querySelectorAll(".post").forEach(post => {
+          const category = post.dataset.category;
+          if (selected === "all" || category.toLowerCase() === selected.toLowerCase()) {
+            post.style.display = "";
+          } else {
+            post.style.display = "none";
+          }
+        });
+      });
+    });
   </script>
 </body>
 </html>
