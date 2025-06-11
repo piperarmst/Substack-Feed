@@ -2,19 +2,17 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Substack Feed Grid</title>
+  <title>Substack Feed with Images</title>
   <style>
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      font-family: sans-serif;
       margin: 2rem;
       background: #ffffff;
       color: #333;
     }
-
     .filters {
       margin-bottom: 2rem;
     }
-
     .filters button {
       margin-right: 0.5rem;
       padding: 0.5rem 1rem;
@@ -24,56 +22,45 @@
       cursor: pointer;
       border-radius: 4px;
     }
-
     .filters button.active {
       background: #808080;
     }
-
     #feed {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 2rem;
     }
-
     .post {
       border: 1px solid #eee;
       border-radius: 10px;
       overflow: hidden;
       box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-      transition: box-shadow 0.2s ease;
       background: white;
     }
-
     .post:hover {
       box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
-
     .post img {
       width: 100%;
       height: 180px;
       object-fit: cover;
       display: block;
     }
-
     .post-content {
       padding: 1rem;
     }
-
     .post-title {
       font-weight: bold;
       font-size: 1rem;
       margin-bottom: 0.5rem;
     }
-
     .post-title a {
       color: #333;
       text-decoration: none;
     }
-
     .post-title a:hover {
       text-decoration: underline;
     }
-
     .post-date {
       font-size: 0.85rem;
       color: #777;
@@ -91,18 +78,17 @@
   <div id="feed">Loading posts...</div>
 
   <script>
-    // Manually assign images to post titles
     const imageMap = {
-      "Blog: Series A Reflection: Why Zanskar?": "https://uploadthing.com/f/09ef69ed-86c0-4b85-b2d9-9bb53e5ec802-image.jpeg",
-      "News: Lightning Dock Update": "https://uploadthing.com/f/cd95109a-dff9-4028-a7f4-2c55677166fc-image.jpeg",
-      "Blog: From Underperforming to Unmatched": "https://uploadthing.com/f/93030c59-bf56-46a9-a1c6-7311cf54d65d-image.jpeg"
+      "News: Lightning Dock Update": "https://example.com/images/lightning.jpg",
+      "Blog: Series A Reflection: Why Zanskar?": "https://example.com/images/zanskar.jpg",
+      "Blog: From Underperforming to Unmatched": "https://example.com/images/unmatched.jpg"
+      // Add more titles and image URLs here
     };
 
     async function fetchRSS() {
       const url = "https://api.rss2json.com/v1/api.json?rss_url=https://testforzanskarweb.substack.com/feed";
       const res = await fetch(url);
       const data = await res.json();
-
       const feed = document.getElementById("feed");
       feed.innerHTML = '';
 
@@ -112,7 +98,57 @@
         const pubDate = new Date(item.pubDate);
         const dateStr = pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
-        // Use hardcoded image map
-        const thumbnail = imageMap[title] || '';
+        let imageURL = item.thumbnail;
 
-        const div = document.create
+        // Fallback: first image from description
+        if (!imageURL) {
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = item.description;
+          const imgEl = tempDiv.querySelector("img");
+          if (imgEl) {
+            imageURL = imgEl.src;
+          }
+        }
+
+        // Final fallback: manually mapped image
+        if (!imageURL && imageMap[title]) {
+          imageURL = imageMap[title];
+        }
+
+        const div = document.createElement("div");
+        div.classList.add("post");
+
+        const match = title.match(/^(Blog|News|Press):/i);
+        const category = match ? match[1] : "Other";
+        div.setAttribute("data-category", category);
+
+        div.innerHTML = `
+          ${imageURL ? `<img src="${imageURL}" alt="Post image">` : ''}
+          <div class="post-content">
+            <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
+            <div class="post-date">${dateStr}</div>
+          </div>
+        `;
+
+        feed.appendChild(div);
+      });
+    }
+
+    fetchRSS();
+
+    // Filter button logic
+    document.querySelectorAll(".filters button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        const selected = btn.dataset.filter;
+        document.querySelectorAll(".post").forEach(post => {
+          const category = post.dataset.category;
+          post.style.display = selected === "all" || category.toLowerCase() === selected.toLowerCase() ? "" : "none";
+        });
+      });
+    });
+  </script>
+</body>
+</html>
