@@ -79,10 +79,9 @@
 
   <script>
     const imageMap = {
-      "News: Lightning Dock Update": "https://example.com/images/lightning.jpg",
-      "Blog: Series A Reflection: Why Zanskar?": "https://example.com/images/zanskar.jpg",
-      "Blog: From Underperforming to Unmatched": "https://example.com/images/unmatched.jpg"
-      // Add more titles and image URLs here
+      "Blog: Series A Reflection: Why Zanskar?": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc3e68bc0-e2b8-44dc-8437-8e43397713af_1550x1034.png",
+      "News: Lightning Dock Update": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F8bb8baa9-28a1-4bdc-97b0-5a7ec2a4ca72_2500x1664.jpeg",
+      "Blog: From Underperforming to Unmatched": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Ffc28dd6a-38fc-48f7-92f4-c7f8859bf4fb_1999x1331.png"
     };
 
     async function fetchRSS() {
@@ -136,7 +135,6 @@
 
     fetchRSS();
 
-    // Filter button logic
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
