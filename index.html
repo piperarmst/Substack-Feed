@@ -23,16 +23,30 @@
       box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease;
     }
     .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
+
+    /* Desktop/Tablet image style (neat fixed height cards) */
     .post img { width:100%; height:180px; object-fit:cover; display:block; }
     .noimg {
       height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem;
     }
+
     .post-content { padding:1rem; }
     .post-title { font-weight:700; font-size:1rem; margin:0 0 .5rem; }
     .post-title a { color:var(--ink); text-decoration:none; }
     .post-title a:hover { text-decoration:underline; }
     .post-date { font-size:.85rem; color:var(--muted); }
     .status { grid-column:1/-1; color:var(--muted); }
+
+    /* -------- Mobile: stop cropping + single column -------- */
+    @media (max-width: 640px) {
+      #feed { grid-template-columns: 1fr; gap: 1rem; }
+      .post img {
+        height:auto;           /* keep aspect ratio */
+        object-fit:contain;    /* show the whole image on small screens */
+        max-height:60vh;       /* safety cap for very tall images */
+      }
+      .noimg { height: 40vw; } /* smaller placeholder on phones */
+    }
   </style>
 </head>
 <body>
@@ -49,8 +63,7 @@
     // ---------- CONFIG ----------
     const PUB = "https://zanskargeothermal.substack.com";
 
-    // Map UI buttons -> actual Substack tag/section slugs
-    // You renamed "Blog" to "Blogs" in Substack.
+    // UI button -> actual Substack tag/section slug
     const TAG_MAP = { blog: "blogs", news: "news", press: "press" };
 
     // Optional manual image overrides (exact post title -> image URL)
@@ -128,13 +141,10 @@
 
     // ---------- IMAGE EXTRACTION ----------
     function extractImage(item) {
-      // 1) explicit thumbnail
-      if (item.thumbnail) return item.thumbnail;
+      if (item.thumbnail) return item.thumbnail;                 // 1) thumbnail
+      if (item.enclosure && item.enclosure.link) return item.enclosure.link; // 2) enclosure
 
-      // 2) RSS enclosure commonly present on Substack tag feeds
-      if (item.enclosure && item.enclosure.link) return item.enclosure.link;
-
-      // 3) look inside common HTML fields for first <img>
+      // 3) search HTML in common fields
       const htmlCandidates = [item.content, item.content_html, item.description];
       for (const html of htmlCandidates) {
         if (!html) continue;
@@ -144,7 +154,7 @@
         if (img) return img.getAttribute("src") || img.getAttribute("data-src") || "";
       }
 
-      // 4) manual overrides by title
+      // 4) manual override by title
       const mapped = imageMap[item.title || ""];
       if (mapped) return mapped;
 
@@ -195,11 +205,11 @@
         return;
       }
 
-      // Try the dedicated tag feeds first
+      // Try dedicated tag/section feeds first
       const candidates = tagFeedCandidates(filter);
       let items = await fetchRssCandidates(`tag:${filter}`, candidates);
 
-      // Fallback: filter the base feed by categories if tag feeds were empty
+      // Fallback: filter base feed by categories if tag feeds were empty
       if (!items.length) {
         const all = await loadAllFeed();
         items = all.filter(it => matchesCategory(it, filter));
