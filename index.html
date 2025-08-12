@@ -65,43 +65,78 @@
       return m ? m[1].toLowerCase() : "";
     };
 
-    // Grab any tags from multiple places rss2json/substack might expose
-    function extractAllTags(item) {
-      let raw = [];
-      // 1) Normal rss2json field
-      if (Array.isArray(item.categories)) raw = raw.concat(item.categories);
-      // 2) Some feeds use category singular
-      if (Array.isArray(item.category)) raw = raw.concat(item.category);
-      else if (typeof item.category === "string") raw.push(item.category);
-      // 3) Rare 'tags' field
-      if (Array.isArray(item.tags)) raw = raw.concat(item.tags);
-
-      // 4) Parse from HTML description: <a rel="tag">…</a> or href contains /tag/ or /tags/
-      try {
-        if (item.description) {
-          const tmp = document.createElement("div");
-          tmp.innerHTML = item.description;
-          const anchors = tmp.querySelectorAll('a[rel="tag"], a[href*="/tag/"], a[href*="/tags/"]');
-          anchors.forEach(a => {
-            const text = a.textContent || "";
-            if (text.trim()) raw.push(text.trim());
-          });
-        }
-      } catch (_) {}
-
-      // Clean and de-dupe
-      const cleaned = [];
-      const seen = new Set();
-      raw.forEach(t => {
-        const val = (t || "").toString().trim();
-        if (val && !seen.has(val.toLowerCase())) {
-          seen.add(val.toLowerCase());
-          cleaned.push(val);
-        }
-      });
-      return cleaned;
+    function titleCase(str) {
+      return str.replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase()
+                .replace(/(^|\s)\S/g, c => c.toUpperCase());
     }
 
+    // Extract tag-like anchors from arbitrary HTML (description/content)
+    function extractTagsFromHtml(html) {
+      const tags = [];
+      try {
+        if (!html) return tags;
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+
+        // Substack often links tag pages at /t/<slug>
+        const anchors = tmp.querySelectorAll(
+          'a[rel="tag"], a[href*="/tag/"], a[href*="/tags/"], a[href*="/t/"]'
+        );
+
+        anchors.forEach(a => {
+          let label = (a.textContent || "").trim();
+          if (!label) {
+            try {
+              const href = a.getAttribute("href") || "";
+              const m = href.match(/\/(?:t|tags?)\/([^\/?#]+)/i);
+              if (m && m[1]) {
+                label = decodeURIComponent(m[1]).replace(/[-_]+/g, " ");
+                label = titleCase(label);
+              }
+            } catch(_) {}
+          }
+          if (label) tags.push(label);
+        });
+      } catch(_) {}
+      // de-dupe (case-insensitive)
+      const seen = new Set();
+      return tags.filter(t => {
+        const k = t.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    }
+
+    // Normalize all possible tag sources rss2json/Substack might expose
+    function extractAllTags(item) {
+      let raw = [];
+      if (Array.isArray(item.categories)) raw = raw.concat(item.categories);
+      if (Array.isArray(item.category)) raw = raw.concat(item.category);
+      else if (typeof item.category === "string") raw.push(item.category);
+      if (Array.isArray(item.tags)) raw = raw.concat(item.tags);
+
+      // Also parse HTML description and (if present) content/content_encoded
+      raw = raw.concat(extractTagsFromHtml(item.description));
+      if (item.content) raw = raw.concat(extractTagsFromHtml(item.content));
+      if (item.content_encoded) raw = raw.concat(extractTagsFromHtml(item.content_encoded));
+
+      // Clean + de-dupe
+      const seen = new Set();
+      return raw
+        .map(t => (t || "").toString().trim())
+        .filter(t => t.length)
+        .filter(t => {
+          const k = t.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+    }
+
+    // ---------- RENDER ----------
     async function fetchRSS() {
       const feedEl = document.getElementById("feed");
       try {
