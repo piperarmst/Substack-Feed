@@ -41,14 +41,15 @@
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
     const FEED_BASE = "https://zanskargeothermal.substack.com/feed";
+    // Bust rss2json cache so new tags appear promptly
     const FEED_URL =
       "https://api.rss2json.com/v1/api.json?rss_url=" +
-      encodeURIComponent(`${FEED_BASE}?ts=${Date.now()}`); // bust rss2json cache
+      encodeURIComponent(`${FEED_BASE}?ts=${Date.now()}`);
 
     // ---------- HELPERS ----------
     const norm = s => (s || "").trim().toLowerCase();
 
-    // Canonicalize common tag variants to our three filters
+    // Canonicalize variants to our fixed filters
     const CANON = tag => {
       const t = norm(tag);
       if (!t) return "";
@@ -56,24 +57,49 @@
       if (t === "press release" || t === "press releases") return "press";
       if (t === "blog" || t === "article" || t === "posts") return "blog";
       if (t === "news" || t === "updates" || t === "update") return "news";
-      return t; // keep other tags (they won’t match our three buttons but still display under cards)
+      return t; // keep unexpected tags for display; they just won’t match buttons
     };
 
-    // Some posts may lack categories; infer from title prefix as a fallback
     const inferFromTitle = title => {
       const m = (title || "").match(/^(blog|news|press)\s*:/i);
       return m ? m[1].toLowerCase() : "";
     };
 
-    // Normalize all possible tag fields rss2json might use
-    function extractRawTags(item) {
-      // rss2json normally uses "categories" (array). Some feeds expose "category" (string or array).
+    // Grab any tags from multiple places rss2json/substack might expose
+    function extractAllTags(item) {
       let raw = [];
+      // 1) Normal rss2json field
       if (Array.isArray(item.categories)) raw = raw.concat(item.categories);
+      // 2) Some feeds use category singular
       if (Array.isArray(item.category)) raw = raw.concat(item.category);
       else if (typeof item.category === "string") raw.push(item.category);
-      if (Array.isArray(item.tags)) raw = raw.concat(item.tags); // rare, but safe
-      return raw.filter(Boolean);
+      // 3) Rare 'tags' field
+      if (Array.isArray(item.tags)) raw = raw.concat(item.tags);
+
+      // 4) Parse from HTML description: <a rel="tag">…</a> or href contains /tag/ or /tags/
+      try {
+        if (item.description) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = item.description;
+          const anchors = tmp.querySelectorAll('a[rel="tag"], a[href*="/tag/"], a[href*="/tags/"]');
+          anchors.forEach(a => {
+            const text = a.textContent || "";
+            if (text.trim()) raw.push(text.trim());
+          });
+        }
+      } catch (_) {}
+
+      // Clean and de-dupe
+      const cleaned = [];
+      const seen = new Set();
+      raw.forEach(t => {
+        const val = (t || "").toString().trim();
+        if (val && !seen.has(val.toLowerCase())) {
+          seen.add(val.toLowerCase());
+          cleaned.push(val);
+        }
+      });
+      return cleaned;
     }
 
     async function fetchRSS() {
@@ -102,16 +128,17 @@
             ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
             : "";
 
-          // Tags: prefer real tags from feed; fallback to title prefix
-          let tagsRaw = extractRawTags(item);
-          let tagsCanon = tagsRaw.map(CANON).filter(Boolean);
+          // Tags from all sources
+          let rawTags = extractAllTags(item);
+          let canonTags = rawTags.map(CANON).filter(Boolean);
 
-          if (!tagsCanon.length) {
+          // If nothing came through, infer from title prefix
+          if (!canonTags.length) {
             const inferred = inferFromTitle(title);
-            if (inferred) tagsCanon = [inferred];
+            if (inferred) canonTags = [inferred];
           }
 
-          const datasetTags = tagsCanon.map(norm).join(",");
+          const datasetTags = canonTags.map(norm).join(",");
 
           // Image: thumbnail → first <img> in description → manual map
           let imageURL = item.thumbnail || "";
@@ -127,8 +154,8 @@
           card.className = "post";
           card.dataset.tags = datasetTags;
 
-          // For display under the card, show original tags if present, else the canonical ones/inferred
-          const displayTags = tagsRaw.length ? tagsRaw : tagsCanon;
+          // Show human-friendly tags under the card: prefer original if present, else canonical/inferred
+          const displayTags = rawTags.length ? rawTags : canonTags;
 
           card.innerHTML = `
             ${imageURL ? `<img src="${imageURL}" alt="">` : `<div class="noimg">No Image</div>`}
@@ -180,7 +207,6 @@
       }
     }
 
-    // Wire up filter buttons
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
@@ -193,4 +219,3 @@
   </script>
 </body>
 </html>
-
