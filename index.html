@@ -39,56 +39,91 @@
     // ------- CONFIG -------
     const PUB = "https://zanskargeothermal.substack.com";
 
+    // Map UI buttons -> real Substack tag/section slugs
+    // You changed Blog -> Blogs, so we point "blog" to "blogs".
+    // Add/keep "press" if/when the client creates it in Substack.
+    const TAG_MAP = {
+      blog:  "blogs",
+      news:  "news",
+      press: "press"
+    };
+
     // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // Wrap base Substack RSS URL in rss2json + cache-buster
+    // Cache
+    const cache = new Map(); // key -> items[]
+
+    // Helpers
+    const proper = s => s ? String(s) : "";
+    const titleCase = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+
     function rss2jsonUrl(rssUrl) {
       const ts = Date.now();
       const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
       return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
 
-    // ------- DATA LOAD (once) -------
-    let ALL_ITEMS = [];
-    async function loadAllOnce() {
-      try {
-        const res = await fetch(rss2jsonUrl(`${PUB}/feed`));
-        const data = await res.json();
-        if (data.status === "ok" && Array.isArray(data.items)) {
-          ALL_ITEMS = data.items;
-        } else {
-          ALL_ITEMS = [];
-        }
-      } catch {
-        ALL_ITEMS = [];
-      }
+    function tagFeedCandidates(uiFilter) {
+      // Resolve UI filter to the real slug
+      const real = TAG_MAP[uiFilter] || uiFilter;
+      const lc = real.toLowerCase();
+      const tc = titleCase(real);
+      // Try several patterns and both lowercase + TitleCase
+      return [
+        `${PUB}/t/${lc}?format=rss`,
+        `${PUB}/t/${tc}?format=rss`,
+        `${PUB}/feed?tag=${encodeURIComponent(lc)}`,
+        `${PUB}/feed?tag=${encodeURIComponent(tc)}`,
+        `${PUB}/feed/tag/${encodeURIComponent(lc)}`,
+        `${PUB}/feed/tag/${encodeURIComponent(tc)}`
+      ];
     }
 
-    // ------- FILTER HELPERS -------
-    const ALLOWED = new Set(["blog","news","press"]); // what we show in UI
+    function sortByDateDesc(items) {
+      return [...items].sort((a,b) => new Date(b.pubDate||0) - new Date(a.pubDate||0));
+    }
 
-    function itemHasAllowedTag(item, wanted) {
-      // Substack categories are an array of tag strings (e.g., ["News","LDG"])
+    function dedupeByLink(items) {
+      const seen = new Set();
+      const out = [];
+      for (const it of items) {
+        const key = proper(it.link);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(it);
+      }
+      return out;
+    }
+
+    async function fetchRssCandidates(key, candidates) {
+      if (cache.has(key)) return cache.get(key);
+      for (const rss of candidates) {
+        try {
+          const res = await fetch(rss2jsonUrl(rss));
+          const data = await res.json();
+          if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
+            cache.set(key, data.items);
+            return data.items;
+          }
+        } catch { /* try next */ }
+      }
+      cache.set(key, []);
+      return [];
+    }
+
+    async function loadAllFeed() {
+      return fetchRssCandidates("all", [`${PUB}/feed`]);
+    }
+
+    // If tag feeds are empty, as a fallback check item.categories
+    function matchesCategory(item, uiFilter) {
+      const real = TAG_MAP[uiFilter] || uiFilter;
       const cats = Array.isArray(item.categories) ? item.categories : [];
-      if (wanted === "__all__") return true;
-
-      const target = wanted.toLowerCase();
-      // case-insensitive match; accept either exact tag ("News") or slug ("news")
-      return cats.some(c => (c || "").toString().trim().toLowerCase() === target);
-    }
-
-    function filterItems(wanted) {
-      if (wanted === "__all__") {
-        // Only show items that have ANY of our allowed tags
-        return ALL_ITEMS.filter(it => {
-          const cats = Array.isArray(it.categories) ? it.categories : [];
-          return cats.some(c => ALLOWED.has((c || "").toString().trim().toLowerCase()));
-        });
-      }
-      return ALL_ITEMS.filter(it => itemHasAllowedTag(it, wanted));
+      const target = real.toLowerCase();
+      return cats.some(c => proper(c).trim().toLowerCase() === target);
     }
 
     // ------- RENDER -------
@@ -102,14 +137,13 @@
         return;
       }
 
-      items.forEach(item => {
+      for (const item of items) {
         const title = item.title || "";
         const link = item.link;
         const dateStr = item.pubDate
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
 
-        // Image: thumbnail → first <img> in description → manual map
         let imageURL = item.thumbnail || "";
         if (!imageURL && item.description) {
           const tmp = document.createElement("div");
@@ -128,20 +162,32 @@
             <div class="post-date">${dateStr}</div>
           </div>
         `;
-        feedEl.appendChild(card);
-      });
+        document.getElementById("feed").appendChild(card);
+      }
     }
 
+    // ------- LOAD PER FILTER -------
     async function loadFilter(filter) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
 
-      if (!ALL_ITEMS.length) {
-        await loadAllOnce(); // fetch once from the base RSS
+      if (filter === "__all__") {
+        const items = await loadAllFeed();
+        renderItems(sortByDateDesc(items), filter);
+        return;
       }
 
-      // Keep ONLY Blog/News/Press in the iframe
-      const items = filterItems(filter);
+      // 1) Try the real tag/section feeds (e.g., /t/blogs, /t/news)
+      const candidates = tagFeedCandidates(filter);
+      let items = await fetchRssCandidates(`tag:${filter}`, candidates);
+
+      // 2) Fallback: filter base feed by categories if tag feeds return nothing
+      if (!items.length) {
+        const all = await loadAllFeed();
+        items = all.filter(it => matchesCategory(it, filter));
+      }
+
+      items = dedupeByLink(sortByDateDesc(items));
       renderItems(items, filter);
     }
 
@@ -154,7 +200,7 @@
       });
     });
 
-    // Initial load: All
+    // Initial
     loadFilter("__all__");
   </script>
 </body>
