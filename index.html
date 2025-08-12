@@ -2,151 +2,130 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Substack Feed with Images</title>
+  <title>Substack Feed – Tag Filters</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 2rem;
-      background: #ffffff;
-      color: #333;
-    }
-    .filters {
-      margin-bottom: 2rem;
-    }
-    .filters button {
-      margin-right: 0.5rem;
-      padding: 0.5rem 1rem;
-      border: none;
-      background: #404040;
-      color: white;
-      cursor: pointer;
-      border-radius: 4px;
-    }
-    .filters button.active {
-      background: #808080;
-    }
-    #feed {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 2rem;
-    }
-    .post {
-      border: 1px solid #eee;
-      border-radius: 10px;
-      overflow: hidden;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-      background: white;
-    }
-    .post:hover {
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    .post img {
-      width: 100%;
-      height: 180px;
-      object-fit: cover;
-      display: block;
-    }
-    .post-content {
-      padding: 1rem;
-    }
-    .post-title {
-      font-weight: bold;
-      font-size: 1rem;
-      margin-bottom: 0.5rem;
-    }
-    .post-title a {
-      color: #333;
-      text-decoration: none;
-    }
-    .post-title a:hover {
-      text-decoration: underline;
-    }
-    .post-date {
-      font-size: 0.85rem;
-      color: #777;
-    }
+    :root { --ink:#333; --muted:#777; --pill:#404040; --pillActive:#808080; --card:#fff; --line:#eee; }
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+           margin: 2rem; color: var(--ink); background: #fff; }
+    .filters { display:flex; flex-wrap: wrap; gap:.5rem; margin-bottom: 1.25rem; }
+    .filters button { padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill); color:#fff;
+                      cursor:pointer; font-size:.95rem; }
+    .filters button.active { background: var(--pillActive); }
+    #feed { display:grid; gap:2rem; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); }
+    .post { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+            box-shadow:0 2px 6px rgba(0,0,0,.05); transition: box-shadow .2s ease; }
+    .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
+    .post img { width:100%; height:180px; object-fit:cover; display:block; }
+    .post-content { padding:1rem; }
+    .post-title { font-weight:700; font-size:1rem; margin:0 0 .5rem; }
+    .post-title a { color:var(--ink); text-decoration:none; }
+    .post-title a:hover { text-decoration:underline; }
+    .post-date { font-size:.85rem; color:var(--muted); }
+    .tagline { margin:.25rem 0 0; font-size:.8rem; color:var(--muted); }
+    .noimg { height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
   </style>
 </head>
 <body>
-  <div class="filters">
-    <button data-filter="all" class="active">All</button>
-    <button data-filter="Blog">Blog</button>
-    <button data-filter="News">News</button>
-    <button data-filter="Press">Press</button>
+  <div class="filters" id="filters">
+    <!-- Filter buttons injected here -->
   </div>
 
   <div id="feed">Loading posts...</div>
 
   <script>
+    // Optional manual overrides: exact post title -> image URL
     const imageMap = {
-      "Blog: Series A Reflection: Why Zanskar?": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fc3e68bc0-e2b8-44dc-8437-8e43397713af_1550x1034.png",
-      "News: Lightning Dock Update": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F8bb8baa9-28a1-4bdc-97b0-5a7ec2a4ca72_2500x1664.jpeg",
-      "Blog: From Underperforming to Unmatched": "https://substackcdn.com/image/fetch/f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Ffc28dd6a-38fc-48f7-92f4-c7f8859bf4fb_1999x1331.png"
+      // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
+    const norm = s => (s || "").trim().toLowerCase();
+
     async function fetchRSS() {
-      const url = "https://api.rss2json.com/v1/api.json?rss_url=https://testforzanskarweb.substack.com/feed";
+      // New Substack URL
+      const url = "https://api.rss2json.com/v1/api.json?rss_url=https://zanskargeothermal.substack.com/feed";
       const res = await fetch(url);
       const data = await res.json();
-      const feed = document.getElementById("feed");
-      feed.innerHTML = '';
 
+      const feedEl = document.getElementById("feed");
+      const filtersEl = document.getElementById("filters");
+      feedEl.innerHTML = "";
+
+      if (!data || !Array.isArray(data.items)) {
+        feedEl.textContent = "No posts found.";
+        return;
+      }
+
+      // Collect unique tags from all items
+      const allTags = new Set();
+      data.items.forEach(item => (item.categories || []).forEach(t => allTags.add(t)));
+
+      // Build filter buttons dynamically
+      const makeBtn = (label, value, active=false) => {
+        const btn = document.createElement("button");
+        btn.textContent = label;
+        btn.dataset.tag = value;
+        if (active) btn.classList.add("active");
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          applyFilter(value);
+        });
+        return btn;
+      };
+
+      filtersEl.innerHTML = "";
+      filtersEl.appendChild(makeBtn("All", "__all__", true));
+      [...allTags].sort((a,b)=>a.localeCompare(b)).forEach(tag => filtersEl.appendChild(makeBtn(tag, tag)));
+
+      // Render posts
       data.items.forEach(item => {
-        const title = item.title;
+        const title = item.title || "";
         const link = item.link;
-        const pubDate = new Date(item.pubDate);
-        const dateStr = pubDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        const pubDate = item.pubDate ? new Date(item.pubDate) : null;
+        const dateStr = pubDate ? pubDate.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }) : "";
+        const tags = (item.categories || []);
+        const tagData = tags.map(norm).join(",");
 
-        let imageURL = item.thumbnail;
-
-        // Fallback: first image from description
-        if (!imageURL) {
-          const tempDiv = document.createElement("div");
-          tempDiv.innerHTML = item.description;
-          const imgEl = tempDiv.querySelector("img");
-          if (imgEl) {
-            imageURL = imgEl.src;
-          }
+        // Resolve image: rss2json thumbnail → first <img> in description → manual map
+        let imageURL = item.thumbnail || "";
+        if (!imageURL && item.description) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = item.description;
+          const imgEl = tmp.querySelector("img");
+          if (imgEl && imgEl.src) imageURL = imgEl.src;
         }
+        if (!imageURL && imageMap[title]) imageURL = imageMap[title];
 
-        // Final fallback: manually mapped image
-        if (!imageURL && imageMap[title]) {
-          imageURL = imageMap[title];
-        }
+        const card = document.createElement("div");
+        card.className = "post";
+        card.dataset.tags = tagData;
 
-        const div = document.createElement("div");
-        div.classList.add("post");
-
-        const match = title.match(/^(Blog|News|Press):/i);
-        const category = match ? match[1] : "Other";
-        div.setAttribute("data-category", category);
-
-        div.innerHTML = `
-          ${imageURL ? `<img src="${imageURL}" alt="Post image">` : ''}
+        card.innerHTML = `
+          ${imageURL ? `<img src="${imageURL}" alt="">` : `<div class="noimg">No Image</div>`}
           <div class="post-content">
             <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
             <div class="post-date">${dateStr}</div>
+            ${tags.length ? `<div class="tagline">Tags: ${tags.join(", ")}</div>` : ``}
           </div>
         `;
 
-        feed.appendChild(div);
+        feedEl.appendChild(card);
       });
+
+      // Tag filter
+      function applyFilter(tag) {
+        const posts = document.querySelectorAll(".post");
+        if (tag === "__all__") { posts.forEach(p => p.style.display = ""); return; }
+        const selected = norm(tag);
+        posts.forEach(p => {
+          const tags = p.dataset.tags.split(",").filter(Boolean);
+          p.style.display = tags.includes(selected) ? "" : "none";
+        });
+      }
     }
 
     fetchRSS();
-
-    document.querySelectorAll(".filters button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-
-        const selected = btn.dataset.filter;
-        document.querySelectorAll(".post").forEach(post => {
-          const category = post.dataset.category;
-          post.style.display = selected === "all" || category.toLowerCase() === selected.toLowerCase() ? "" : "none";
-        });
-      });
-    });
   </script>
 </body>
 </html>
