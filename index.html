@@ -12,7 +12,8 @@
     .filters button { padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill); color:#fff; cursor:pointer; font-size:.95rem; }
     .filters button.active { background:var(--pillActive); }
     #feed { display:grid; gap:2rem; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
-    .post { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
+    .post { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+            box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
     .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
     .post img { width:100%; height:180px; object-fit:cover; display:block; }
     .noimg { height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
@@ -21,8 +22,7 @@
     .post-title a { color:var(--ink); text-decoration:none; }
     .post-title a:hover { text-decoration:underline; }
     .post-date { font-size:.85rem; color:var(--muted); }
-    .tagline { margin:.25rem 0 0; font-size:.8rem; color:var(--muted); }
-    .empty,.error { color:var(--muted); font-size:1rem; grid-column:1/-1; }
+    .status { grid-column:1/-1; color:var(--muted); }
   </style>
 </head>
 <body>
@@ -36,221 +36,133 @@
   <div id="feed">Loading posts...</div>
 
   <script>
-    // ---------- CONFIG ----------
+    // ------- CONFIG -------
+    const PUB = "https://zanskargeothermal.substack.com";
+    // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
-    const FEED_BASE = "https://zanskargeothermal.substack.com/feed";
-    // Bust rss2json cache so new tags appear promptly
-    const FEED_URL =
-      "https://api.rss2json.com/v1/api.json?rss_url=" +
-      encodeURIComponent(`${FEED_BASE}?ts=${Date.now()}`);
 
-    // ---------- HELPERS ----------
-    const norm = s => (s || "").trim().toLowerCase();
-
-    // Canonicalize variants to our fixed filters
-    const CANON = tag => {
-      const t = norm(tag);
-      if (!t) return "";
-      if (t.startsWith("press")) return "press";
-      if (t === "press release" || t === "press releases") return "press";
-      if (t === "blog" || t === "article" || t === "posts") return "blog";
-      if (t === "news" || t === "updates" || t === "update") return "news";
-      return t; // keep unexpected tags for display; they just won’t match buttons
-    };
-
-    const inferFromTitle = title => {
-      const m = (title || "").match(/^(blog|news|press)\s*:/i);
-      return m ? m[1].toLowerCase() : "";
-    };
-
-    function titleCase(str) {
-      return str.replace(/\s+/g, ' ')
-                .trim()
-                .toLowerCase()
-                .replace(/(^|\s)\S/g, c => c.toUpperCase());
+    // Candidate tag-feed URL patterns (most Substacks respond to one of these)
+    function tagFeedUrls(slug) {
+      return [
+        `${PUB}/feed?tag=${encodeURIComponent(slug)}`,
+        `${PUB}/feed/tag/${encodeURIComponent(slug)}`,
+        `${PUB}/t/${encodeURIComponent(slug)}?format=rss`,
+      ];
     }
 
-    // Extract tag-like anchors from arbitrary HTML (description/content)
-    function extractTagsFromHtml(html) {
-      const tags = [];
-      try {
-        if (!html) return tags;
-        const tmp = document.createElement("div");
-        tmp.innerHTML = html;
+    // Wrap a Substack RSS URL in rss2json + cache-buster so we always refresh
+    function rss2jsonUrl(rssUrl) {
+      const ts = Date.now();
+      // include ts inside rss_url so rss2json cache is busted
+      const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
+      return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
+    }
 
-        // Substack often links tag pages at /t/<slug>
-        const anchors = tmp.querySelectorAll(
-          'a[rel="tag"], a[href*="/tag/"], a[href*="/tags/"], a[href*="/t/"]'
-        );
+    // In-memory cache: { key -> items[] }
+    const cache = new Map();
 
-        anchors.forEach(a => {
-          let label = (a.textContent || "").trim();
-          if (!label) {
-            try {
-              const href = a.getAttribute("href") || "";
-              const m = href.match(/\/(?:t|tags?)\/([^\/?#]+)/i);
-              if (m && m[1]) {
-                label = decodeURIComponent(m[1]).replace(/[-_]+/g, " ");
-                label = titleCase(label);
-              }
-            } catch(_) {}
+    // ------- FETCHERS -------
+    async function fetchItemsFor(key, rssUrlCandidates) {
+      // serve from cache if present
+      if (cache.has(key)) return cache.get(key);
+
+      for (const rss of rssUrlCandidates) {
+        try {
+          const url = rss2jsonUrl(rss);
+          const res = await fetch(url);
+          const data = await res.json();
+          if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
+            cache.set(key, data.items);
+            return data.items;
           }
-          if (label) tags.push(label);
-        });
-      } catch(_) {}
-      // de-dupe (case-insensitive)
-      const seen = new Set();
-      return tags.filter(t => {
-        const k = t.toLowerCase();
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-    }
-
-    // Normalize all possible tag sources rss2json/Substack might expose
-    function extractAllTags(item) {
-      let raw = [];
-      if (Array.isArray(item.categories)) raw = raw.concat(item.categories);
-      if (Array.isArray(item.category)) raw = raw.concat(item.category);
-      else if (typeof item.category === "string") raw.push(item.category);
-      if (Array.isArray(item.tags)) raw = raw.concat(item.tags);
-
-      // Also parse HTML description and (if present) content/content_encoded
-      raw = raw.concat(extractTagsFromHtml(item.description));
-      if (item.content) raw = raw.concat(extractTagsFromHtml(item.content));
-      if (item.content_encoded) raw = raw.concat(extractTagsFromHtml(item.content_encoded));
-
-      // Clean + de-dupe
-      const seen = new Set();
-      return raw
-        .map(t => (t || "").toString().trim())
-        .filter(t => t.length)
-        .filter(t => {
-          const k = t.toLowerCase();
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-    }
-
-    // ---------- RENDER ----------
-    async function fetchRSS() {
-      const feedEl = document.getElementById("feed");
-      try {
-        const res = await fetch(FEED_URL);
-        const data = await res.json();
-
-        if (data.status !== "ok") {
-          feedEl.innerHTML = `<div class="error">Couldn’t load posts (rss2json: ${data.message || "error"}). Try again shortly.</div>`;
-          return;
+        } catch (e) {
+          // try next candidate
+          console.warn("tag feed try failed:", rss, e);
         }
-
-        const items = Array.isArray(data.items) ? data.items : [];
-        if (!items.length) {
-          feedEl.innerHTML = `<div class="empty">No posts found. Ensure at least one post is public.</div>`;
-          return;
-        }
-
-        feedEl.innerHTML = "";
-
-        items.forEach(item => {
-          const title = item.title || "";
-          const link = item.link;
-          const dateStr = item.pubDate
-            ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
-            : "";
-
-          // Tags from all sources
-          let rawTags = extractAllTags(item);
-          let canonTags = rawTags.map(CANON).filter(Boolean);
-
-          // If nothing came through, infer from title prefix
-          if (!canonTags.length) {
-            const inferred = inferFromTitle(title);
-            if (inferred) canonTags = [inferred];
-          }
-
-          const datasetTags = canonTags.map(norm).join(",");
-
-          // Image: thumbnail → first <img> in description → manual map
-          let imageURL = item.thumbnail || "";
-          if (!imageURL && item.description) {
-            const tmp = document.createElement("div");
-            tmp.innerHTML = item.description;
-            const imgEl = tmp.querySelector("img");
-            if (imgEl && imgEl.src) imageURL = imgEl.src;
-          }
-          if (!imageURL && imageMap[title]) imageURL = imageMap[title];
-
-          const card = document.createElement("div");
-          card.className = "post";
-          card.dataset.tags = datasetTags;
-
-          // Show human-friendly tags under the card: prefer original if present, else canonical/inferred
-          const displayTags = rawTags.length ? rawTags : canonTags;
-
-          card.innerHTML = `
-            ${imageURL ? `<img src="${imageURL}" alt="">` : `<div class="noimg">No Image</div>`}
-            <div class="post-content">
-              <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
-              <div class="post-date">${dateStr}</div>
-              ${displayTags.length ? `<div class="tagline">Tags: ${displayTags.join(", ")}</div>` : ``}
-            </div>
-          `;
-
-          feedEl.appendChild(card);
-        });
-
-        // Apply whichever filter is active
-        const active = document.querySelector(".filters button.active")?.dataset.filter || "__all__";
-        applyFilter(active);
-
-      } catch (e) {
-        console.error(e);
-        document.getElementById("feed").innerHTML = `<div class="error">Network error loading the feed. Please try again.</div>`;
       }
+      // If none worked, cache empty to avoid spamming requests
+      cache.set(key, []);
+      return [];
     }
 
-    function applyFilter(tag) {
-      const posts = Array.from(document.querySelectorAll(".post"));
-      const wrap = document.getElementById("feed");
-      const prior = wrap.querySelector(".empty-row");
-      if (prior) prior.remove();
+    // "All" uses the base feed
+    function baseFeedUrls() {
+      return [ `${PUB}/feed` ];
+    }
 
-      if (tag === "__all__") {
-        posts.forEach(p => p.style.display = "");
+    // ------- RENDER -------
+    function renderItems(items) {
+      const feedEl = document.getElementById("feed");
+      feedEl.innerHTML = "";
+
+      if (!items.length) {
+        feedEl.innerHTML = `<div class="status">No posts found for this filter yet.</div>`;
         return;
       }
 
-      const selected = norm(tag);
-      let shown = 0;
-      posts.forEach(p => {
-        const tags = p.dataset.tags.split(",").filter(Boolean);
-        const match = tags.includes(selected);
-        p.style.display = match ? "" : "none";
-        if (match) shown++;
-      });
+      items.forEach(item => {
+        const title = item.title || "";
+        const link = item.link;
+        const dateStr = item.pubDate
+          ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
+          : "";
 
-      if (!shown) {
-        const msg = document.createElement("div");
-        msg.className = "empty empty-row";
-        msg.textContent = `No posts tagged “${tag}” yet.`;
-        wrap.appendChild(msg);
-      }
+        // Image: thumbnail → first <img> in description → manual map
+        let imageURL = item.thumbnail || "";
+        if (!imageURL && item.description) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = item.description;
+          const imgEl = tmp.querySelector("img");
+          if (imgEl && imgEl.src) imageURL = imgEl.src;
+        }
+        if (!imageURL && imageMap[title]) imageURL = imageMap[title];
+
+        const card = document.createElement("div");
+        card.className = "post";
+        card.innerHTML = `
+          ${imageURL ? `<img src="${imageURL}" alt="">` : `<div class="noimg">No Image</div>`}
+          <div class="post-content">
+            <div class="post-title"><a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a></div>
+            <div class="post-date">${dateStr}</div>
+          </div>
+        `;
+        document.getElementById("feed").appendChild(card);
+      });
     }
 
+    async function loadFilter(filter) {
+      const feedEl = document.getElementById("feed");
+      feedEl.innerHTML = `<div class="status">Loading…</div>`;
+
+      let key = filter;
+      let urls = [];
+
+      if (filter === "__all__") {
+        key = "all";
+        urls = baseFeedUrls();
+      } else {
+        // map button label to slug; you can change these if your tag slugs differ
+        const slug = filter; // "blog", "news", "press"
+        urls = tagFeedUrls(slug);
+      }
+
+      const items = await fetchItemsFor(key, urls);
+      renderItems(items);
+    }
+
+    // Wire up buttons
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
-        applyFilter(btn.dataset.filter);
+        loadFilter(btn.dataset.filter);
       });
     });
 
-    fetchRSS();
+    // Initial load: All
+    loadFilter("__all__");
   </script>
 </body>
 </html>
