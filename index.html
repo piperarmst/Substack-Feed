@@ -24,7 +24,7 @@
     .post-title a:hover { text-decoration:underline; }
     .post-date { font-size:.85rem; color:var(--muted); }
     .tagline { margin:.25rem 0 0; font-size:.8rem; color:var(--muted); }
-    .empty,.error { color:var(--muted); font-size:1rem; }
+    .empty,.error { color:var(--muted); font-size:1rem; grid-column:1/-1; }
   </style>
 </head>
 <body>
@@ -38,16 +38,38 @@
   <div id="feed">Loading posts...</div>
 
   <script>
+    // ---------- CONFIG ----------
     // Optional manual overrides: exact post title -> image URL
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
+    const FEED_BASE = "https://zanskargeothermal.substack.com/feed";
 
+    // Build a cache-busted rss2json URL so we always fetch fresh tags
     const FEED_URL =
-      "https://api.rss2json.com/v1/api.json?rss_url=https://zanskargeothermal.substack.com/feed";
+      "https://api.rss2json.com/v1/api.json?rss_url=" +
+      encodeURIComponent(`${FEED_BASE}?ts=${Date.now()}`);
 
+    // ---------- HELPERS ----------
     const norm = s => (s || "").trim().toLowerCase();
 
+    // Map common synonyms to our canonical filters
+    const CANON = tag => {
+      const t = norm(tag);
+      if (t.startsWith("press")) return "press";
+      if (t === "press release" || t === "press releases") return "press";
+      if (t === "blog" || t === "article" || t === "posts") return "blog";
+      if (t === "news" || t === "updates" || t === "update") return "news";
+      return t;
+    };
+
+    // Infer a tag from the title prefix if a post has no categories yet
+    const inferFromTitle = title => {
+      const m = (title || "").match(/^(blog|news|press)\s*:/i);
+      return m ? m[1].toLowerCase() : "";
+    };
+
+    // ---------- RENDER ----------
     async function fetchRSS() {
       const feedEl = document.getElementById("feed");
       try {
@@ -61,7 +83,7 @@
 
         const items = Array.isArray(data.items) ? data.items : [];
         if (!items.length) {
-          feedEl.innerHTML = `<div class="empty">No posts found. Ensure at least one post is public and republish.</div>`;
+          feedEl.innerHTML = `<div class="empty">No posts found. Ensure at least one post is public.</div>`;
           return;
         }
 
@@ -73,10 +95,16 @@
           const dateStr = item.pubDate
             ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
             : "";
-          const tags = (item.categories || []);
+
+          // Tags: prefer real Substack categories; fallback to title prefix
+          let tags = (item.categories || []).map(CANON).filter(Boolean);
+          if (!tags.length) {
+            const inferred = inferFromTitle(title);
+            if (inferred) tags = [inferred];
+          }
           const tagData = tags.map(norm).join(",");
 
-          // Resolve image: rss2json thumbnail → first <img> in description → manual map
+          // Image: thumbnail → first <img> in description → manual map
           let imageURL = item.thumbnail || "";
           if (!imageURL && item.description) {
             const tmp = document.createElement("div");
@@ -102,27 +130,44 @@
           feedEl.appendChild(card);
         });
 
-        // Apply current button (defaults to All)
+        // Apply whichever filter button is active (defaults to All)
         const active = document.querySelector(".filters button.active")?.dataset.filter || "__all__";
         applyFilter(active);
 
       } catch (e) {
         console.error(e);
-        feedEl.innerHTML = `<div class="error">Network error loading the feed. Please try again.</div>`;
+        document.getElementById("feed").innerHTML = `<div class="error">Network error loading the feed. Please try again.</div>`;
       }
     }
 
     function applyFilter(tag) {
-      const posts = document.querySelectorAll(".post");
-      if (tag === "__all__") { posts.forEach(p => p.style.display = ""); return; }
+      const posts = Array.from(document.querySelectorAll(".post"));
+      const wrap = document.getElementById("feed");
+      // remove prior empty-state (if any)
+      const prior = wrap.querySelector(".empty-row");
+      if (prior) prior.remove();
+
+      if (tag === "__all__") {
+        posts.forEach(p => p.style.display = "");
+        return;
+      }
       const selected = norm(tag);
+      let shown = 0;
       posts.forEach(p => {
         const tags = p.dataset.tags.split(",").filter(Boolean);
-        p.style.display = tags.includes(selected) ? "" : "none";
+        const match = tags.includes(selected);
+        p.style.display = match ? "" : "none";
+        if (match) shown++;
       });
+      if (!shown) {
+        const msg = document.createElement("div");
+        msg.className = "empty empty-row";
+        msg.textContent = `No posts tagged “${tag}” yet.`;
+        wrap.appendChild(msg);
+      }
     }
 
-    // Wire up fixed buttons
+    // Wire up filter buttons
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
