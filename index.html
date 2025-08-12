@@ -1,22 +1,32 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>Zanskar Feed – Blog/News/Press Filters</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { --ink:#333; --muted:#777; --pill:#404040; --pillActive:#808080; --card:#fff; --line:#eee; }
-    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-           margin:2rem; color:var(--ink); background:#fff; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 2rem; color: var(--ink); background:#fff;
+    }
     .filters { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.25rem; }
-    .filters button { padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill); color:#fff; cursor:pointer; font-size:.95rem; }
+    .filters button {
+      padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill);
+      color:#fff; cursor:pointer; font-size:.95rem;
+    }
     .filters button.active { background:var(--pillActive); }
     #feed { display:grid; gap:2rem; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
-    .post { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
-            box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
+    .post {
+      background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+      box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease;
+    }
     .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
     .post img { width:100%; height:180px; object-fit:cover; display:block; }
-    .noimg { height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
+    .noimg {
+      height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem;
+    }
     .post-content { padding:1rem; }
     .post-title { font-weight:700; font-size:1rem; margin:0 0 .5rem; }
     .post-title a { color:var(--ink); text-decoration:none; }
@@ -36,42 +46,34 @@
   <div id="feed">Loading posts...</div>
 
   <script>
-    // ------- CONFIG -------
+    // ---------- CONFIG ----------
     const PUB = "https://zanskargeothermal.substack.com";
 
-    // Map UI buttons -> real Substack tag/section slugs
-    // You changed Blog -> Blogs, so we point "blog" to "blogs".
-    // Add/keep "press" if/when the client creates it in Substack.
-    const TAG_MAP = {
-      blog:  "blogs",
-      news:  "news",
-      press: "press"
-    };
+    // Map UI buttons -> actual Substack tag/section slugs
+    // You renamed "Blog" to "Blogs" in Substack.
+    const TAG_MAP = { blog: "blogs", news: "news", press: "press" };
 
     // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // Cache
+    // ---------- UTIL / CACHE ----------
     const cache = new Map(); // key -> items[]
 
-    // Helpers
-    const proper = s => s ? String(s) : "";
+    const proper = v => (v == null ? "" : String(v));
     const titleCase = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
     function rss2jsonUrl(rssUrl) {
-      const ts = Date.now();
+      const ts = Date.now(); // cache-bust the rss2json request
       const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
       return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
 
     function tagFeedCandidates(uiFilter) {
-      // Resolve UI filter to the real slug
       const real = TAG_MAP[uiFilter] || uiFilter;
       const lc = real.toLowerCase();
       const tc = titleCase(real);
-      // Try several patterns and both lowercase + TitleCase
       return [
         `${PUB}/t/${lc}?format=rss`,
         `${PUB}/t/${tc}?format=rss`,
@@ -108,7 +110,7 @@
             cache.set(key, data.items);
             return data.items;
           }
-        } catch { /* try next */ }
+        } catch { /* keep trying */ }
       }
       cache.set(key, []);
       return [];
@@ -118,15 +120,38 @@
       return fetchRssCandidates("all", [`${PUB}/feed`]);
     }
 
-    // If tag feeds are empty, as a fallback check item.categories
     function matchesCategory(item, uiFilter) {
-      const real = TAG_MAP[uiFilter] || uiFilter;
+      const real = (TAG_MAP[uiFilter] || uiFilter).toLowerCase();
       const cats = Array.isArray(item.categories) ? item.categories : [];
-      const target = real.toLowerCase();
-      return cats.some(c => proper(c).trim().toLowerCase() === target);
+      return cats.some(c => proper(c).trim().toLowerCase() === real);
     }
 
-    // ------- RENDER -------
+    // ---------- IMAGE EXTRACTION ----------
+    function extractImage(item) {
+      // 1) explicit thumbnail
+      if (item.thumbnail) return item.thumbnail;
+
+      // 2) RSS enclosure commonly present on Substack tag feeds
+      if (item.enclosure && item.enclosure.link) return item.enclosure.link;
+
+      // 3) look inside common HTML fields for first <img>
+      const htmlCandidates = [item.content, item.content_html, item.description];
+      for (const html of htmlCandidates) {
+        if (!html) continue;
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        const img = tmp.querySelector("img");
+        if (img) return img.getAttribute("src") || img.getAttribute("data-src") || "";
+      }
+
+      // 4) manual overrides by title
+      const mapped = imageMap[item.title || ""];
+      if (mapped) return mapped;
+
+      return "";
+    }
+
+    // ---------- RENDER ----------
     function renderItems(items, wanted) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = "";
@@ -144,14 +169,7 @@
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
 
-        let imageURL = item.thumbnail || "";
-        if (!imageURL && item.description) {
-          const tmp = document.createElement("div");
-          tmp.innerHTML = item.description;
-          const imgEl = tmp.querySelector("img");
-          if (imgEl && imgEl.src) imageURL = imgEl.src;
-        }
-        if (!imageURL && imageMap[title]) imageURL = imageMap[title];
+        const imageURL = extractImage(item);
 
         const card = document.createElement("div");
         card.className = "post";
@@ -162,11 +180,11 @@
             <div class="post-date">${dateStr}</div>
           </div>
         `;
-        document.getElementById("feed").appendChild(card);
+        feedEl.appendChild(card);
       }
     }
 
-    // ------- LOAD PER FILTER -------
+    // ---------- CONTROLLER ----------
     async function loadFilter(filter) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
@@ -177,11 +195,11 @@
         return;
       }
 
-      // 1) Try the real tag/section feeds (e.g., /t/blogs, /t/news)
+      // Try the dedicated tag feeds first
       const candidates = tagFeedCandidates(filter);
       let items = await fetchRssCandidates(`tag:${filter}`, candidates);
 
-      // 2) Fallback: filter base feed by categories if tag feeds return nothing
+      // Fallback: filter the base feed by categories if tag feeds were empty
       if (!items.length) {
         const all = await loadAllFeed();
         items = all.filter(it => matchesCategory(it, filter));
@@ -200,7 +218,7 @@
       });
     });
 
-    // Initial
+    // Initial load
     loadFilter("__all__");
   </script>
 </body>
