@@ -38,67 +38,67 @@
   <script>
     // ------- CONFIG -------
     const PUB = "https://zanskargeothermal.substack.com";
+
     // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // Candidate tag-feed URL patterns (most Substacks respond to one of these)
-    function tagFeedUrls(slug) {
-      return [
-        `${PUB}/feed?tag=${encodeURIComponent(slug)}`,
-        `${PUB}/feed/tag/${encodeURIComponent(slug)}`,
-        `${PUB}/t/${encodeURIComponent(slug)}?format=rss`,
-      ];
-    }
-
-    // Wrap a Substack RSS URL in rss2json + cache-buster so we always refresh
+    // Wrap base Substack RSS URL in rss2json + cache-buster
     function rss2jsonUrl(rssUrl) {
       const ts = Date.now();
-      // include ts inside rss_url so rss2json cache is busted
       const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
       return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
 
-    // In-memory cache: { key -> items[] }
-    const cache = new Map();
-
-    // ------- FETCHERS -------
-    async function fetchItemsFor(key, rssUrlCandidates) {
-      // serve from cache if present
-      if (cache.has(key)) return cache.get(key);
-
-      for (const rss of rssUrlCandidates) {
-        try {
-          const url = rss2jsonUrl(rss);
-          const res = await fetch(url);
-          const data = await res.json();
-          if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
-            cache.set(key, data.items);
-            return data.items;
-          }
-        } catch (e) {
-          // try next candidate
-          console.warn("tag feed try failed:", rss, e);
+    // ------- DATA LOAD (once) -------
+    let ALL_ITEMS = [];
+    async function loadAllOnce() {
+      try {
+        const res = await fetch(rss2jsonUrl(`${PUB}/feed`));
+        const data = await res.json();
+        if (data.status === "ok" && Array.isArray(data.items)) {
+          ALL_ITEMS = data.items;
+        } else {
+          ALL_ITEMS = [];
         }
+      } catch {
+        ALL_ITEMS = [];
       }
-      // If none worked, cache empty to avoid spamming requests
-      cache.set(key, []);
-      return [];
     }
 
-    // "All" uses the base feed
-    function baseFeedUrls() {
-      return [ `${PUB}/feed` ];
+    // ------- FILTER HELPERS -------
+    const ALLOWED = new Set(["blog","news","press"]); // what we show in UI
+
+    function itemHasAllowedTag(item, wanted) {
+      // Substack categories are an array of tag strings (e.g., ["News","LDG"])
+      const cats = Array.isArray(item.categories) ? item.categories : [];
+      if (wanted === "__all__") return true;
+
+      const target = wanted.toLowerCase();
+      // case-insensitive match; accept either exact tag ("News") or slug ("news")
+      return cats.some(c => (c || "").toString().trim().toLowerCase() === target);
+    }
+
+    function filterItems(wanted) {
+      if (wanted === "__all__") {
+        // Only show items that have ANY of our allowed tags
+        return ALL_ITEMS.filter(it => {
+          const cats = Array.isArray(it.categories) ? it.categories : [];
+          return cats.some(c => ALLOWED.has((c || "").toString().trim().toLowerCase()));
+        });
+      }
+      return ALL_ITEMS.filter(it => itemHasAllowedTag(it, wanted));
     }
 
     // ------- RENDER -------
-    function renderItems(items) {
+    function renderItems(items, wanted) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = "";
 
       if (!items.length) {
-        feedEl.innerHTML = `<div class="status">No posts found for this filter yet.</div>`;
+        const label = wanted === "__all__" ? "these filters" : `"${wanted}"`;
+        feedEl.innerHTML = `<div class="status">No posts tagged ${label} yet.</div>`;
         return;
       }
 
@@ -128,7 +128,7 @@
             <div class="post-date">${dateStr}</div>
           </div>
         `;
-        document.getElementById("feed").appendChild(card);
+        feedEl.appendChild(card);
       });
     }
 
@@ -136,20 +136,13 @@
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
 
-      let key = filter;
-      let urls = [];
-
-      if (filter === "__all__") {
-        key = "all";
-        urls = baseFeedUrls();
-      } else {
-        // map button label to slug; you can change these if your tag slugs differ
-        const slug = filter; // "blog", "news", "press"
-        urls = tagFeedUrls(slug);
+      if (!ALL_ITEMS.length) {
+        await loadAllOnce(); // fetch once from the base RSS
       }
 
-      const items = await fetchItemsFor(key, urls);
-      renderItems(items);
+      // Keep ONLY Blog/News/Press in the iframe
+      const items = filterItems(filter);
+      renderItems(items, filter);
     }
 
     // Wire up buttons
