@@ -24,7 +24,7 @@
     }
     .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
 
-    /* Desktop/Tablet image style (neat fixed height cards) */
+    /* Desktop/Tablet */
     .post img { width:100%; height:180px; object-fit:cover; display:block; }
     .noimg {
       height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem;
@@ -37,15 +37,11 @@
     .post-date { font-size:.85rem; color:var(--muted); }
     .status { grid-column:1/-1; color:var(--muted); }
 
-    /* -------- Mobile: stop cropping + single column -------- */
+    /* Mobile */
     @media (max-width: 640px) {
       #feed { grid-template-columns: 1fr; gap: 1rem; }
-      .post img {
-        height:auto;           /* keep aspect ratio */
-        object-fit:contain;    /* show the whole image on small screens */
-        max-height:60vh;       /* safety cap for very tall images */
-      }
-      .noimg { height: 40vw; } /* smaller placeholder on phones */
+      .post img { height:auto; object-fit:contain; max-height:60vh; }
+      .noimg { height:40vw; }
     }
   </style>
 </head>
@@ -60,10 +56,9 @@
   <div id="feed">Loading posts...</div>
 
   <script>
-    // ---------- CONFIG ----------
+    // ------------ CONFIG ------------
     const PUB = "https://zanskargeothermal.substack.com";
-
-    // UI button -> actual Substack tag/section slug
+    // UI label -> actual Substack tag slug (you’re using /t/blogs and /t/news)
     const TAG_MAP = { blog: "blogs", news: "news", press: "press" };
 
     // Optional manual image overrides (exact post title -> image URL)
@@ -71,22 +66,31 @@
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // ---------- UTIL / CACHE ----------
-    const cache = new Map(); // key -> items[]
+    // CORS-safe proxy for fetching RSS XML
+    const PROXY = "https://api.allorigins.win/raw?url=";
 
+    // ------------ UTIL ------------
+    const cache = new Map(); // key -> parsed items[]
     const proper = v => (v == null ? "" : String(v));
-    const titleCase = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
-    function rss2jsonUrl(rssUrl) {
-      const ts = Date.now(); // cache-bust the rss2json request
-      const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
-      return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
-    }
+    const sortByDateDesc = items => [...items].sort(
+      (a,b) => new Date(b.pubDate||0) - new Date(a.pubDate||0)
+    );
+
+    const dedupeByLink = items => {
+      const seen = new Set(), out = [];
+      for (const it of items) {
+        const key = proper(it.link);
+        if (!key || seen.has(key)) continue;
+        seen.add(key); out.push(it);
+      }
+      return out;
+    };
 
     function tagFeedCandidates(uiFilter) {
       const real = TAG_MAP[uiFilter] || uiFilter;
       const lc = real.toLowerCase();
-      const tc = titleCase(real);
+      const tc = lc.charAt(0).toUpperCase() + lc.slice(1);
       return [
         `${PUB}/t/${lc}?format=rss`,
         `${PUB}/t/${tc}?format=rss`,
@@ -97,71 +101,93 @@
       ];
     }
 
-    function sortByDateDesc(items) {
-      return [...items].sort((a,b) => new Date(b.pubDate||0) - new Date(a.pubDate||0));
+    function feedUrlWithBuster(url) {
+      const ts = Date.now();
+      return url.includes("?") ? `${url}&ts=${ts}` : `${url}?ts=${ts}`;
     }
 
-    function dedupeByLink(items) {
-      const seen = new Set();
-      const out = [];
-      for (const it of items) {
-        const key = proper(it.link);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push(it);
-      }
-      return out;
-    }
-
-    async function fetchRssCandidates(key, candidates) {
+    // ------------ RSS PARSER ------------
+    async function fetchAndParseRssXML(key, urlCandidates) {
       if (cache.has(key)) return cache.get(key);
-      for (const rss of candidates) {
+
+      for (const rssUrl of urlCandidates) {
         try {
-          const res = await fetch(rss2jsonUrl(rss));
-          const data = await res.json();
-          if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
-            cache.set(key, data.items);
-            return data.items;
+          const target = feedUrlWithBuster(rssUrl);
+          const proxied = PROXY + encodeURIComponent(target);
+          const text = await fetch(proxied).then(r => {
+            if (!r.ok) throw new Error("Fetch failed");
+            return r.text();
+          });
+
+          const doc = new DOMParser().parseFromString(text, "application/xml");
+          const items = Array.from(doc.querySelectorAll("item")).map(parseItemFromXML);
+
+          if (items.length) {
+            cache.set(key, items);
+            return items;
           }
-        } catch { /* keep trying */ }
+        } catch (e) {
+          // try next candidate
+        }
       }
+
       cache.set(key, []);
       return [];
     }
 
-    async function loadAllFeed() {
-      return fetchRssCandidates("all", [`${PUB}/feed`]);
+    function textContent(node, sel) {
+      const el = node.querySelector(sel);
+      return el ? el.textContent.trim() : "";
+    }
+
+    function parseItemFromXML(itemEl) {
+      const title = textContent(itemEl, "title");
+      const link = textContent(itemEl, "link");
+      const pubDate = textContent(itemEl, "pubDate");
+
+      // categories
+      const categories = Array.from(itemEl.querySelectorAll("category")).map(x => x.textContent.trim());
+
+      // image candidates
+      let thumbnail = "";
+      // enclosure tag
+      const enclosure = itemEl.querySelector("enclosure[url]");
+      if (enclosure) thumbnail = enclosure.getAttribute("url") || "";
+      // media:content
+      if (!thumbnail) {
+        const media = itemEl.querySelector("media\\:content, content");
+        if (media && media.getAttribute) {
+          thumbnail = media.getAttribute("url") || "";
+        }
+      }
+      // parse content:encoded or description for first <img>
+      const contentHTML =
+        textContent(itemEl, "content\\:encoded") ||
+        textContent(itemEl, "content") ||
+        textContent(itemEl, "description");
+
+      let firstImg = "";
+      if (contentHTML) {
+        const div = document.createElement("div");
+        div.innerHTML = contentHTML;
+        const img = div.querySelector("img");
+        if (img) firstImg = img.getAttribute("src") || img.getAttribute("data-src") || "";
+      }
+
+      const derivedThumb = thumbnail || firstImg || (imageMap[title] || "");
+
+      return { title, link, pubDate, categories, thumbnail: derivedThumb, description: contentHTML };
     }
 
     function matchesCategory(item, uiFilter) {
       const real = (TAG_MAP[uiFilter] || uiFilter).toLowerCase();
-      const cats = Array.isArray(item.categories) ? item.categories : [];
-      return cats.some(c => proper(c).trim().toLowerCase() === real);
+      return (item.categories || []).some(c => proper(c).toLowerCase() === real);
     }
 
-    // ---------- IMAGE EXTRACTION ----------
-    function extractImage(item) {
-      if (item.thumbnail) return item.thumbnail;                 // 1) thumbnail
-      if (item.enclosure && item.enclosure.link) return item.enclosure.link; // 2) enclosure
+    // Base feed (All)
+    function baseFeedUrls() { return [`${PUB}/feed`]; }
 
-      // 3) search HTML in common fields
-      const htmlCandidates = [item.content, item.content_html, item.description];
-      for (const html of htmlCandidates) {
-        if (!html) continue;
-        const tmp = document.createElement("div");
-        tmp.innerHTML = html;
-        const img = tmp.querySelector("img");
-        if (img) return img.getAttribute("src") || img.getAttribute("data-src") || "";
-      }
-
-      // 4) manual override by title
-      const mapped = imageMap[item.title || ""];
-      if (mapped) return mapped;
-
-      return "";
-    }
-
-    // ---------- RENDER ----------
+    // ------------ RENDER ------------
     function renderItems(items, wanted) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = "";
@@ -178,8 +204,7 @@
         const dateStr = item.pubDate
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
-
-        const imageURL = extractImage(item);
+        const imageURL = item.thumbnail || "";
 
         const card = document.createElement("div");
         card.className = "post";
@@ -194,29 +219,35 @@
       }
     }
 
-    // ---------- CONTROLLER ----------
+    // ------------ CONTROLLER ------------
     async function loadFilter(filter) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
 
-      if (filter === "__all__") {
-        const items = await loadAllFeed();
-        renderItems(sortByDateDesc(items), filter);
-        return;
+      try {
+        if (filter === "__all__") {
+          const items = await fetchAndParseRssXML("all", baseFeedUrls());
+          renderItems(sortByDateDesc(items), filter);
+          return;
+        }
+
+        // Try dedicated tag feeds first
+        const candidates = tagFeedCandidates(filter);
+        let items = await fetchAndParseRssXML(`tag:${filter}`, candidates);
+
+        // Fallback to base feed filtering
+        if (!items.length) {
+          const all = await fetchAndParseRssXML("all", baseFeedUrls());
+          items = all.filter(it => matchesCategory(it, filter));
+        }
+
+        items = dedupeByLink(sortByDateDesc(items));
+        renderItems(items, filter);
+      } catch (err) {
+        feedEl.innerHTML = `<div class="status">Error loading feed. Please refresh.</div>`;
+        // Optional: console error for debugging
+        console.error(err);
       }
-
-      // Try dedicated tag/section feeds first
-      const candidates = tagFeedCandidates(filter);
-      let items = await fetchRssCandidates(`tag:${filter}`, candidates);
-
-      // Fallback: filter base feed by categories if tag feeds were empty
-      if (!items.length) {
-        const all = await loadAllFeed();
-        items = all.filter(it => matchesCategory(it, filter));
-      }
-
-      items = dedupeByLink(sortByDateDesc(items));
-      renderItems(items, filter);
     }
 
     // Wire up buttons
