@@ -39,23 +39,28 @@
     // ===== CONFIG =====
     const PUB = "https://zanskargeothermal.substack.com";
 
-    // Auto-refresh cadence for rss2json cache (minutes)
+    // Auto-refresh cadence for rss2json cache (minutes).
+    // You can bump to 10 if you want even less load / fewer rate-limit blips.
     const BUCKET_MINUTES = 5;
     const TS_BUCKET = Math.floor(Date.now() / (BUCKET_MINUTES * 60 * 1000));
+
+    // Aliases so “Blogs” or “Media Coverage” still match.
+    const TAG_ALIASES = {
+      blog:  ["blog", "blogs"],
+      news:  ["news"],
+      press: ["press", "press-release", "press-releases", "media", "media-coverage", "media coverage"]
+    };
 
     // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // Canonical filter -> array of acceptable tag slugs (aliases)
-    const TAG_ALIASES = {
-      blog:  ["blog", "blogs"],
-      news:  ["news"],
-      press: ["press", "media", "media-coverage"]
-    };
+    // ===== UTIL =====
+    const norm = s => (s || "").trim().toLowerCase();
+    const slugify = s => norm(s).replace(/[\s_]+/g, "-");
 
-    // ===== FEED HELPERS =====
+    // ===== FEED URL HELPERS =====
     function tagFeedUrlsFor(slug) {
       return [
         `${PUB}/feed?tag=${encodeURIComponent(slug)}`,
@@ -64,13 +69,11 @@
       ];
     }
     function allTagFeedUrlsForAliases(aliases) {
-      // flatten all candidate urls for every alias
-      return aliases.flatMap(slug => tagFeedUrlsFor(slug));
+      return aliases.flatMap(tagFeedUrlsFor);
     }
     function baseFeedUrls() { return [ `${PUB}/feed` ]; }
 
     function rss2jsonUrl(rssUrl) {
-      // Put ts inside rss_url so rss2json re-fetches on our bucket cadence
       const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${TS_BUCKET}` : `${rssUrl}?ts=${TS_BUCKET}`;
       return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
@@ -105,7 +108,6 @@
     }
 
     // ===== TAG DETECTION (fallback path) =====
-    const norm = s => (s || "").trim().toLowerCase();
     function inferFromTitlePrefix(title) {
       const m = (title || "").match(/^(blog|news|press)\s*:/i);
       return m ? m[1].toLowerCase() : "";
@@ -126,38 +128,86 @@
       return Array.from(new Set(out));
     }
     function itemMatchesAnyAlias(item, aliases) {
-      const aliasSet = new Set(aliases.map(norm));
-      // categories array
+      const aliasSet = new Set(aliases.map(a => slugify(a)));
+      // categories array from rss2json or our XML parse
       if (Array.isArray(item.categories)) {
-        for (const c of item.categories) if (aliasSet.has(norm(c))) return true;
+        for (const c of item.categories) if (aliasSet.has(slugify(c))) return true;
       }
       // HTML tag links
       const slugs = new Set([
         ...extractTagSlugsFromHtml(item.description),
         ...extractTagSlugsFromHtml(item.content),
         ...extractTagSlugsFromHtml(item.content_encoded)
-      ]);
+      ].map(slugify));
       for (const a of aliasSet) if (slugs.has(a)) return true;
       // Title prefix fallback
       const pref = inferFromTitlePrefix(item.title);
-      if (pref && aliasSet.has(pref)) return true;
+      if (pref && aliasSet.has(slugify(pref))) return true;
       return false;
     }
 
-    // ===== CACHE & FETCH =====
-    const cache = new Map(); // key -> items[]
-
+    // ===== FETCH with FALLBACK =====
+    // 1) Try rss2json; 2) If it fails/empty, fetch raw RSS via AllOrigins and parse.
     async function fetchOneRss(rss) {
-      const url = rss2jsonUrl(rss);
-      const res = await fetch(url);
-      return res.json();
+      // rss2json attempt
+      try {
+        const url = rss2jsonUrl(rss);
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data?.status === "ok" && Array.isArray(data.items) && data.items.length) {
+          return { status: "ok", items: data.items };
+        }
+      } catch (_) { /* fall through */ }
+
+      // Fallback: raw XML via permissive proxy + DOMParser
+      try {
+        const proxied = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
+        const xmlText = await fetch(proxied, { cache: "no-store" }).then(r => r.text());
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(xmlText, "application/xml");
+
+        const nodes = Array.from(doc.querySelectorAll("item"));
+        const items = nodes.map(n => {
+          const get = sel => n.querySelector(sel)?.textContent || "";
+          const title = get("title");
+          const link = get("link");
+          const pubDate = get("pubDate") || get("published") || "";
+          const description = get("description") || "";
+          const contentEncoded = get("content\\:encoded") || "";
+
+          // thumbnail / media / enclosure
+          let thumbnail = "";
+          const mediaContent = n.querySelector("media\\:content, content");
+          if (mediaContent?.getAttribute("url")) thumbnail = mediaContent.getAttribute("url");
+          const enclosure = n.querySelector("enclosure");
+          if (!thumbnail && enclosure?.getAttribute("url")) thumbnail = enclosure.getAttribute("url");
+
+          // categories
+          const categories = Array.from(n.querySelectorAll("category")).map(c => c.textContent.trim());
+
+          return {
+            title, link, pubDate,
+            description,
+            content: "",                 // keep shape similar to rss2json
+            content_encoded: contentEncoded,
+            thumbnail,
+            categories
+          };
+        });
+
+        return { status: "ok", items };
+      } catch (e2) {
+        return { status: "error", items: [], message: String(e2) };
+      }
     }
 
+    // Merge results from multiple candidate tag feeds
+    const cache = new Map(); // key -> items[]
     async function fetchItemsFromCandidates(key, candidates) {
       if (cache.has(key)) return cache.get(key);
 
       let merged = [];
-      const seenLinks = new Set();
+      const seen = new Set();
 
       for (const rss of candidates) {
         try {
@@ -165,9 +215,9 @@
           if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
             for (const it of data.items) {
               const k = it.link || it.guid || JSON.stringify(it);
-              if (!seenLinks.has(k)) {
+              if (!seen.has(k)) {
                 merged.push(it);
-                seenLinks.add(k);
+                seen.add(k);
               }
             }
           }
@@ -175,7 +225,7 @@
           console.warn("Feed try failed:", rss, e);
         }
       }
-      cache.set(key, merged); // even if empty, cache to avoid thrash
+      cache.set(key, merged); // cache even if empty to avoid thrash
       return merged;
     }
 
@@ -191,10 +241,11 @@
 
       items.forEach(item => {
         const title = item.title || "";
-        const link = item.link;
+        const link = item.link || "#";
         const dateStr = item.pubDate
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
+
         const imageURL = getImageUrl(item, title);
 
         const card = document.createElement("div");
@@ -210,6 +261,7 @@
       });
     }
 
+    // Load a filter
     async function loadFilter(filter) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
