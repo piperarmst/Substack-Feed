@@ -1,52 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
   <meta charset="UTF-8" />
   <title>Zanskar Feed – Blog/News/Press Filters</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { --ink:#333; --muted:#777; --pill:#404040; --pillActive:#808080; --card:#fff; --line:#eee; }
-    * { box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      margin: 2rem; color: var(--ink); background:#fff;
-    }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+           margin:2rem; color:var(--ink); background:#fff; }
     .filters { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.25rem; }
-    .filters button {
-      padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill);
-      color:#fff; cursor:pointer; font-size:.95rem;
-    }
+    .filters button { padding:.5rem .85rem; border:none; border-radius:999px; background:var(--pill); color:#fff; cursor:pointer; font-size:.95rem; }
     .filters button.active { background:var(--pillActive); }
     #feed { display:grid; gap:2rem; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
-    .post {
-      background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
-      box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease;
-    }
+    .post { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+            box-shadow:0 2px 6px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
     .post:hover { box-shadow:0 4px 12px rgba(0,0,0,.1); }
-
-    /* Desktop/Tablet image style (neat fixed height cards) */
     .post img { width:100%; height:180px; object-fit:cover; display:block; }
-    .noimg {
-      height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem;
-    }
-
+    .noimg { height:180px; background:#f3f3f3; color:#9a9a9a; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
     .post-content { padding:1rem; }
     .post-title { font-weight:700; font-size:1rem; margin:0 0 .5rem; }
     .post-title a { color:var(--ink); text-decoration:none; }
     .post-title a:hover { text-decoration:underline; }
     .post-date { font-size:.85rem; color:var(--muted); }
     .status { grid-column:1/-1; color:var(--muted); }
-
-    /* -------- Mobile: stop cropping + single column -------- */
-    @media (max-width: 640px) {
-      #feed { grid-template-columns: 1fr; gap: 1rem; }
-      .post img {
-        height:auto;           /* keep aspect ratio */
-        object-fit:contain;    /* show the whole image on small screens */
-        max-height:60vh;       /* safety cap for very tall images */
-      }
-      .noimg { height: 40vw; } /* smaller placeholder on phones */
-    }
   </style>
 </head>
 <body>
@@ -60,126 +36,97 @@
   <div id="feed">Loading posts...</div>
 
   <script>
-    // ---------- CONFIG ----------
+    // ===== CONFIG =====
     const PUB = "https://zanskargeothermal.substack.com";
 
-    // UI button -> actual Substack tag/section slug
-    const TAG_MAP = { blog: "blogs", news: "news", press: "press" };
+    // Auto-refresh cadence: change to 1, 5, 10 (minutes) as you like
+    const BUCKET_MINUTES = 5;
+    // This value only changes every BUCKET_MINUTES, forcing rss2json to re-fetch
+    const TS_BUCKET = Math.floor(Date.now() / (BUCKET_MINUTES * 60 * 1000));
 
     // Optional manual image overrides (exact post title -> image URL)
     const imageMap = {
       // "Exact Post Title": "https://your-cdn.com/image.jpg",
     };
 
-    // ---------- UTIL / CACHE ----------
-    const cache = new Map(); // key -> items[]
-
-    const proper = v => (v == null ? "" : String(v));
-    const titleCase = s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-
-    function rss2jsonUrl(rssUrl) {
-      const ts = Date.now(); // cache-bust the rss2json request
-      const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${ts}` : `${rssUrl}?ts=${ts}`;
-      return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
-    }
-
-    function tagFeedCandidates(uiFilter) {
-      const real = TAG_MAP[uiFilter] || uiFilter;
-      const lc = real.toLowerCase();
-      const tc = titleCase(real);
+    // ===== FEED HELPERS =====
+    // Candidate tag-feed URL patterns (Substack supports at least one of these)
+    function tagFeedUrls(slug) {
       return [
-        `${PUB}/t/${lc}?format=rss`,
-        `${PUB}/t/${tc}?format=rss`,
-        `${PUB}/feed?tag=${encodeURIComponent(lc)}`,
-        `${PUB}/feed?tag=${encodeURIComponent(tc)}`,
-        `${PUB}/feed/tag/${encodeURIComponent(lc)}`,
-        `${PUB}/feed/tag/${encodeURIComponent(tc)}`
+        `${PUB}/feed?tag=${encodeURIComponent(slug)}`,
+        `${PUB}/feed/tag/${encodeURIComponent(slug)}`,
+        `${PUB}/t/${encodeURIComponent(slug)}?format=rss`,
       ];
     }
 
-    function sortByDateDesc(items) {
-      return [...items].sort((a,b) => new Date(b.pubDate||0) - new Date(a.pubDate||0));
+    // Base (All) feed
+    function baseFeedUrls() {
+      return [ `${PUB}/feed` ];
     }
 
-    function dedupeByLink(items) {
-      const seen = new Set();
-      const out = [];
-      for (const it of items) {
-        const key = proper(it.link);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push(it);
-      }
-      return out;
+    // Wrap a Substack RSS URL in rss2json and include the *bucketed* ts
+    function rss2jsonUrl(rssUrl) {
+      // Put ts INSIDE the rss_url so rss2json cache is busted
+      const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${TS_BUCKET}` : `${rssUrl}?ts=${TS_BUCKET}`;
+      return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
 
-    async function fetchRssCandidates(key, candidates) {
+    // ===== CACHE =====
+    // Simple in-memory cache so switching filters is instant
+    const cache = new Map(); // key -> items[]
+
+    async function fetchItemsFor(key, rssUrlCandidates) {
       if (cache.has(key)) return cache.get(key);
-      for (const rss of candidates) {
+
+      for (const rss of rssUrlCandidates) {
         try {
-          const res = await fetch(rss2jsonUrl(rss));
+          const url = rss2jsonUrl(rss);
+          const res = await fetch(url);
           const data = await res.json();
-          if (data.status === "ok" && Array.isArray(data.items) && data.items.length) {
-            cache.set(key, data.items);
-            return data.items;
+          if (data.status === "ok" && Array.isArray(data.items)) {
+            // Even an empty array is valid; but prefer first source with >0 items
+            if (data.items.length) {
+              cache.set(key, data.items);
+              return data.items;
+            }
+            // Keep trying other candidates if empty
           }
-        } catch { /* keep trying */ }
+        } catch (e) {
+          // Try next candidate
+          console.warn("Feed try failed:", rss, e);
+        }
       }
+      // If none worked (or all empty), cache empty so we don't spam requests
       cache.set(key, []);
       return [];
     }
 
-    async function loadAllFeed() {
-      return fetchRssCandidates("all", [`${PUB}/feed`]);
-    }
-
-    function matchesCategory(item, uiFilter) {
-      const real = (TAG_MAP[uiFilter] || uiFilter).toLowerCase();
-      const cats = Array.isArray(item.categories) ? item.categories : [];
-      return cats.some(c => proper(c).trim().toLowerCase() === real);
-    }
-
-    // ---------- IMAGE EXTRACTION ----------
-    function extractImage(item) {
-      if (item.thumbnail) return item.thumbnail;                 // 1) thumbnail
-      if (item.enclosure && item.enclosure.link) return item.enclosure.link; // 2) enclosure
-
-      // 3) search HTML in common fields
-      const htmlCandidates = [item.content, item.content_html, item.description];
-      for (const html of htmlCandidates) {
-        if (!html) continue;
-        const tmp = document.createElement("div");
-        tmp.innerHTML = html;
-        const img = tmp.querySelector("img");
-        if (img) return img.getAttribute("src") || img.getAttribute("data-src") || "";
-      }
-
-      // 4) manual override by title
-      const mapped = imageMap[item.title || ""];
-      if (mapped) return mapped;
-
-      return "";
-    }
-
-    // ---------- RENDER ----------
-    function renderItems(items, wanted) {
+    // ===== RENDER =====
+    function renderItems(items) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = "";
 
       if (!items.length) {
-        const label = wanted === "__all__" ? "these filters" : `"${wanted}"`;
-        feedEl.innerHTML = `<div class="status">No posts tagged ${label} yet.</div>`;
+        feedEl.innerHTML = `<div class="status">No posts found for this filter yet.</div>`;
         return;
       }
 
-      for (const item of items) {
+      items.forEach(item => {
         const title = item.title || "";
         const link = item.link;
         const dateStr = item.pubDate
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
 
-        const imageURL = extractImage(item);
+        // Image: thumbnail → first <img> in description → manual map
+        let imageURL = item.thumbnail || "";
+        if (!imageURL && item.description) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = item.description;
+          const imgEl = tmp.querySelector("img");
+          if (imgEl && imgEl.src) imageURL = imgEl.src;
+        }
+        if (!imageURL && imageMap[title]) imageURL = imageMap[title];
 
         const card = document.createElement("div");
         card.className = "post";
@@ -191,35 +138,28 @@
           </div>
         `;
         feedEl.appendChild(card);
-      }
+      });
     }
 
-    // ---------- CONTROLLER ----------
     async function loadFilter(filter) {
       const feedEl = document.getElementById("feed");
       feedEl.innerHTML = `<div class="status">Loading…</div>`;
 
+      let key, urls;
       if (filter === "__all__") {
-        const items = await loadAllFeed();
-        renderItems(sortByDateDesc(items), filter);
-        return;
+        key = "all";
+        urls = baseFeedUrls();
+      } else {
+        key = `tag:${filter}`;
+        const slug = filter; // e.g., "blog", "news", "press"; change here if your slugs differ
+        urls = tagFeedUrls(slug);
       }
 
-      // Try dedicated tag/section feeds first
-      const candidates = tagFeedCandidates(filter);
-      let items = await fetchRssCandidates(`tag:${filter}`, candidates);
-
-      // Fallback: filter base feed by categories if tag feeds were empty
-      if (!items.length) {
-        const all = await loadAllFeed();
-        items = all.filter(it => matchesCategory(it, filter));
-      }
-
-      items = dedupeByLink(sortByDateDesc(items));
-      renderItems(items, filter);
+      const items = await fetchItemsFor(key, urls);
+      renderItems(items);
     }
 
-    // Wire up buttons
+    // Wire up the fixed buttons
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
