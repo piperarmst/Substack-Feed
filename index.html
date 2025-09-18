@@ -39,9 +39,8 @@
     // ===== CONFIG =====
     const PUB = "https://zanskargeothermal.substack.com";
 
-    // Auto-refresh cadence: change to 1, 5, 10 (minutes) as you like
+    // Auto-refresh cadence for rss2json cache (minutes)
     const BUCKET_MINUTES = 5;
-    // This value only changes every BUCKET_MINUTES, forcing rss2json to re-fetch
     const TS_BUCKET = Math.floor(Date.now() / (BUCKET_MINUTES * 60 * 1000));
 
     // Optional manual image overrides (exact post title -> image URL)
@@ -50,7 +49,6 @@
     };
 
     // ===== FEED HELPERS =====
-    // Candidate tag-feed URL patterns (Substack supports at least one of these)
     function tagFeedUrls(slug) {
       return [
         `${PUB}/feed?tag=${encodeURIComponent(slug)}`,
@@ -59,20 +57,54 @@
       ];
     }
 
-    // Base (All) feed
     function baseFeedUrls() {
       return [ `${PUB}/feed` ];
     }
 
-    // Wrap a Substack RSS URL in rss2json and include the *bucketed* ts
     function rss2jsonUrl(rssUrl) {
-      // Put ts INSIDE the rss_url so rss2json cache is busted
       const bust = rssUrl.includes("?") ? `${rssUrl}&ts=${TS_BUCKET}` : `${rssUrl}?ts=${TS_BUCKET}`;
       return "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(bust);
     }
 
+    // ===== IMAGE RESOLVER (more robust for Press/link posts) =====
+    function firstImgFromHtml(html) {
+      try {
+        if (!html) return "";
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        const img = tmp.querySelector("img");
+        return img?.src || "";
+      } catch { return ""; }
+    }
+
+    function getImageUrl(item, title) {
+      // 1) rss2json thumbnail
+      if (item.thumbnail) return item.thumbnail;
+
+      // 2) enclosure object(s) (media:content, enclosure)
+      if (item.enclosure) {
+        const e = item.enclosure;
+        if (e.link) return e.link;
+        if (e.url)  return e.url;
+      }
+      if (Array.isArray(item.enclosures) && item.enclosures.length) {
+        const e0 = item.enclosures[0];
+        if (e0?.link) return e0.link;
+        if (e0?.url)  return e0.url;
+      }
+
+      // 3) parse from description/content/content_encoded
+      let url = firstImgFromHtml(item.description);
+      if (!url && item.content) url = firstImgFromHtml(item.content);
+      if (!url && item.content_encoded) url = firstImgFromHtml(item.content_encoded);
+
+      // 4) manual override
+      if (!url && imageMap[title]) return imageMap[title];
+
+      return url || "";
+    }
+
     // ===== CACHE =====
-    // Simple in-memory cache so switching filters is instant
     const cache = new Map(); // key -> items[]
 
     async function fetchItemsFor(key, rssUrlCandidates) {
@@ -84,19 +116,16 @@
           const res = await fetch(url);
           const data = await res.json();
           if (data.status === "ok" && Array.isArray(data.items)) {
-            // Even an empty array is valid; but prefer first source with >0 items
             if (data.items.length) {
               cache.set(key, data.items);
               return data.items;
             }
-            // Keep trying other candidates if empty
+            // try next candidate if empty
           }
         } catch (e) {
-          // Try next candidate
           console.warn("Feed try failed:", rss, e);
         }
       }
-      // If none worked (or all empty), cache empty so we don't spam requests
       cache.set(key, []);
       return [];
     }
@@ -118,15 +147,7 @@
           ? new Date(item.pubDate).toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" })
           : "";
 
-        // Image: thumbnail → first <img> in description → manual map
-        let imageURL = item.thumbnail || "";
-        if (!imageURL && item.description) {
-          const tmp = document.createElement("div");
-          tmp.innerHTML = item.description;
-          const imgEl = tmp.querySelector("img");
-          if (imgEl && imgEl.src) imageURL = imgEl.src;
-        }
-        if (!imageURL && imageMap[title]) imageURL = imageMap[title];
+        const imageURL = getImageUrl(item, title);
 
         const card = document.createElement("div");
         card.className = "post";
@@ -151,7 +172,7 @@
         urls = baseFeedUrls();
       } else {
         key = `tag:${filter}`;
-        const slug = filter; // e.g., "blog", "news", "press"; change here if your slugs differ
+        const slug = filter; // if your real tag slug differs, map it here
         urls = tagFeedUrls(slug);
       }
 
@@ -159,7 +180,7 @@
       renderItems(items);
     }
 
-    // Wire up the fixed buttons
+    // Wire up buttons
     document.querySelectorAll(".filters button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
